@@ -25,6 +25,23 @@ const principalConversion = (principal) => {
   return modifiedPrincipal;
 };
 
+const interceptUnauthorizedRequests = (server, keycloakConfig, basePath) => {
+  server.ext('onPostAuth', (request, reply) => {
+    return isLoginOrLogout(request) || !request.auth.credentials || isAuthorized(request.auth.credentials, keycloakConfig.requiredRoles)
+      ? reply.continue()
+      : reply(`<p>The user has insufficient permissions to access this page. <a href="${basePath || ''}/sso/logout">Logout and try as another user</a></p>`);
+  });
+}
+
+const propagateBearerToken = (server) => {
+  server.ext('onPreHandler', function(request, reply) {
+    if (!request.headers.authorization && request.auth.credentials && request.auth.credentials.accessToken) {
+      request.headers.authorization = `Bearer ${request.auth.credentials.accessToken.token}`;
+    }
+    return reply.continue();
+  });
+}
+
 export default function (kibana) {
   return new kibana.Plugin({
     require: ['elasticsearch', 'kibana'],
@@ -51,6 +68,7 @@ export default function (kibana) {
           })
         }),
         requiredRoles: Joi.array().items(Joi.string()).default([]),
+        propagateBearerToken: Joi.boolean().default(false),
         enabled: Joi.boolean().default(true)
       }).default();
     },
@@ -72,11 +90,10 @@ export default function (kibana) {
         });
       }).then(() => {
         server.auth.strategy('keycloak', 'keycloak', 'required');
-        server.ext('onPostAuth', (request, reply) => {
-          return isLoginOrLogout(request) || !request.auth.credentials || isAuthorized(request.auth.credentials, keycloakConfig.requiredRoles)
-            ? reply.continue()
-            : reply(`<p>The user has insufficient permissions to access this page. <a href="${basePath || ''}/sso/logout">Logout and try as another user</a></p>`);
-        });
+        interceptUnauthorizedRequests(server, keycloakConfig, basePath);
+        if (keycloakConfig.propagateBearerToken) {
+          propagateBearerToken(server);
+        }
       });
     }
   });
